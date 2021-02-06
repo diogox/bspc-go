@@ -18,21 +18,22 @@ type (
 
 	Client interface {
 		Query(rawCmd string, resResolver queryResponseResolver) error
-		Subscribe(rawEvents string) (chan Event, chan error)
-		SubscribeEvents(event EventType, events ...EventType) (chan Event, chan error)
-		Close() error
+		Subscribe(rawEvents string) (chan Event, chan error, error)
+		SubscribeEvents(event EventType, events ...EventType) (chan Event, chan error, error)
 	}
 
+	// client holds the socket path, because it needs to initialize a socket connection on each method call.
+	// Reusing the same connection across multiple calls is not reliable, because bspwm will sometimes close
+	// connections after it responds.
 	client struct {
-		ipc    ipcConn
-		logger Logger
+		socketPath string
+		logger     Logger
 	}
 )
 
-// New returns a client instance with the first unix socket it finds
-// with a path name matching: /tmp/bspwm<host_name>_<display_number>_<screen_number>-socket
+// New returns a client instance with the first unix socket path it finds
+// with a name matching: /tmp/bspwm<host_name>_<display_number>_<screen_number>-socket
 // If the value passed in as a logger is nil, logging will be disabled.
-// This function may return an errInvalidUnixSocket sentinel error, if it fails to connect.
 func New(logger Logger) (Client, error) {
 	errSocketFound := errors.New("socket has been found")
 
@@ -58,23 +59,19 @@ func New(logger Logger) (Client, error) {
 		return nil, fmt.Errorf("failed to find bspwm unix socket: %v", err)
 	}
 
-	return NewWithSocket(socketPath, logger)
+	return NewWithSocketPath(socketPath, logger)
 }
 
-// NewWithSocket returns a client instance with the given UNIX socket path.
+// NewWithSocketPath returns a client instance with the given UNIX socket path.
 // If the value passed in as a logger is nil, logging will be disabled.
-// This function may return an errInvalidUnixSocket sentinel error, if it fails to connect.
-func NewWithSocket(path string, logger Logger) (Client, error) {
-	logger.Info(fmt.Sprintf("using socket at path %s", path))
-
-	ipc, err := newIPCConn(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize socket connection: %w", err)
+func NewWithSocketPath(path string, logger Logger) (Client, error) {
+	if _, err := newUnixSocketAddress(path); err != nil {
+		return nil, err
 	}
 
 	return client{
-		ipc:    ipc,
-		logger: logger,
+		socketPath: path,
+		logger:     logger,
 	}, nil
 }
 
@@ -83,25 +80,23 @@ func NewWithSocket(path string, logger Logger) (Client, error) {
 // the response type.
 func (c client) Query(rawCmd string, resResolver queryResponseResolver) error {
 	// TODO: How can I return a sentinel error if the command is invalid? Need to read errors from the socket.
+	c.logger.Info(fmt.Sprintf("using socket at path %s", c.socketPath))
 
-	if err := c.ipc.Send(ipcCommand(rawCmd)); err != nil {
-		if errors.Is(err, errClosedUnixSocket) {
-			// bspwm will sometimes close the socket connection after a previous communication.
-			// This ensures that we reconnect and retry, until it works.
-
-			ipc, err := newIPCConn(c.ipc.socketAddr.Name)
-			if err != nil {
-				return fmt.Errorf("failed to initialize socket connection: %w", err)
-			}
-
-			c.ipc = ipc
-			return c.Query(rawCmd, resResolver)
-		}
-
+	socketAddr, err := newUnixSocketAddress(c.socketPath)
+	if err != nil {
 		return err
 	}
 
-	resBytes, err := c.ipc.Receive()
+	ipc, err := newIPCConn(socketAddr)
+	if err != nil {
+		return fmt.Errorf("failed to initialize socket connection: %w", err)
+	}
+
+	if err := ipc.Send(ipcCommand(rawCmd)); err != nil {
+		return err
+	}
+
+	resBytes, err := ipc.Receive()
 	if err != nil {
 		return fmt.Errorf("query failed: %v", err)
 	}
@@ -120,16 +115,26 @@ func (c client) Query(rawCmd string, resResolver queryResponseResolver) error {
 // Subscribe returns two channels: one for the events published by bspwm
 // and that we subscribe to, and one for the errors that might occur during
 // the subscription.
-func (c client) Subscribe(rawEvents string) (chan Event, chan error) {
-	const subscribeCmd = "subscribe"
+func (c client) Subscribe(rawEvents string) (chan Event, chan error, error) {
+	c.logger.Info(fmt.Sprintf("using socket at path %s", c.socketPath))
 
-	if err := c.ipc.Send(ipcCommand(subscribeCmd + " " + rawEvents)); err != nil {
-		errCh := make(chan error, 1)
-		errCh <- err
-		return nil, errCh
+	socketAddr, err := newUnixSocketAddress(c.socketPath)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	resCh, errCh := c.ipc.ReceiveAsync()
+	ipc, err := newIPCConn(socketAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to initialize socket connection: %w", err)
+	}
+
+	const subscribeCmd = "subscribe"
+
+	if err := ipc.Send(ipcCommand(subscribeCmd + " " + rawEvents)); err != nil {
+		return nil, nil, err
+	}
+
+	resCh, errCh := ipc.ReceiveAsync()
 
 	eventCh := make(chan Event)
 	go func(resCh chan []byte) {
@@ -909,22 +914,18 @@ func (c client) Subscribe(rawEvents string) (chan Event, chan error) {
 		}
 	}(resCh)
 
-	return eventCh, errCh
+	return eventCh, errCh, nil
 }
 
 // SubscribeEvents takes in one or more of the available events in this package and calls Subscribe
 // with the appropriate raw command. Take a look at Subscribe to know more.
-func (c client) SubscribeEvents(event EventType, events ...EventType) (chan Event, chan error) {
+func (c client) SubscribeEvents(event EventType, events ...EventType) (chan Event, chan error, error) {
 	eventsStr := []string{string(event)}
 	for _, ev := range events {
 		eventsStr = append(eventsStr, string(ev))
 	}
 
 	return c.Subscribe(strings.Join(eventsStr, " "))
-}
-
-func (c client) Close() error {
-	return c.ipc.Close()
 }
 
 func (c client) logEventWarning(ev EventType, msg string) {

@@ -21,13 +21,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer func() {
-		if err := c.Close(); err != nil {
-			panic(err)
-		}
-	}()
 
-	eventCh, errCh := c.SubscribeEvents(bspc.EventTypeNodeAdd, bspc.EventTypeNodeRemove, bspc.EventTypePointerAction, bspc.EventTypeDesktopFocus)
+	eventCh, errCh, err := c.SubscribeEvents(bspc.EventTypeNodeAdd, bspc.EventTypeNodeRemove, bspc.EventTypePointerAction, bspc.EventTypeDesktopFocus)
+	if err != nil {
+		panic(err)
+	}
+
 	for {
 		select {
 		case err := <-errCh:

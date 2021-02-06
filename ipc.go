@@ -7,13 +7,9 @@ import (
 	"io"
 	"net"
 	"strings"
-	"syscall"
 )
 
-var (
-	errInvalidUnixSocket = errors.New("invalid unix socket")
-	errClosedUnixSocket  = errors.New("unix socket has been closed")
-)
+var errInvalidUnixSocket = errors.New("invalid unix socket")
 
 type ipcCommand string
 
@@ -30,26 +26,30 @@ func (ic ipcCommand) intoMessage() string {
 	return msg
 }
 
+// TODO: Try using monkey-patching to facilitate unit testing for this: var resolveAddr = func() {//...} and then replacing that in the test file and here.
+func newUnixSocketAddress(path string) (*net.UnixAddr, error) {
+	addr, err := net.ResolveUnixAddr("unixgram", path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve unix address: %v", err)
+	}
+
+	return addr, nil
+}
+
 type ipcConn struct {
 	socketAddr *net.UnixAddr
 	socketConn *net.UnixConn
 }
 
-func newIPCConn(addressPath string) (ipcConn, error) {
-	// TODO: Try using monkey-patching to facilitate unit testing for this: var resolveAddr = func() {//...} and then replacing that in the test file.
-	addr, err := net.ResolveUnixAddr("unixgram", addressPath)
-	if err != nil {
-		return ipcConn{}, fmt.Errorf("failed to resolve unix address: %v", err)
-	}
-
+func newIPCConn(unixSocketAddr *net.UnixAddr) (ipcConn, error) {
 	// TODO: For this line too
-	conn, err := net.DialUnix("unix", nil, addr)
+	conn, err := net.DialUnix("unix", nil, unixSocketAddr)
 	if err != nil {
 		return ipcConn{}, fmt.Errorf("%w: %v", errInvalidUnixSocket, err)
 	}
 
 	return ipcConn{
-		socketAddr: addr,
+		socketAddr: unixSocketAddr,
 		socketConn: conn,
 	}, nil
 }
@@ -57,11 +57,6 @@ func newIPCConn(addressPath string) (ipcConn, error) {
 func (ipc ipcConn) Send(cmd ipcCommand) error {
 	// TODO: For this line too
 	if _, err := ipc.socketConn.Write([]byte(cmd.intoMessage())); err != nil {
-		if errors.Is(err, syscall.EPIPE) {
-			// bspwm has closed the socket connection
-			return errClosedUnixSocket
-		}
-
 		return fmt.Errorf("failed to send message: %v", err)
 	}
 

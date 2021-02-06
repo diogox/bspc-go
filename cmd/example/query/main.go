@@ -20,11 +20,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer func() {
-		if err := c.Close(); err != nil {
-			panic(err)
-		}
-	}()
 
 	var st bspc.State
 	if err := c.Query("wm --dump-state", bspc.ToStruct(&st)); err != nil {
