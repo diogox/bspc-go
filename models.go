@@ -7,23 +7,12 @@ import (
 	"strings"
 )
 
+// NilID represents the value returned by bspwm when an ID should be nil.
+const NilID = ID(0)
+
 type (
 	// ID represents any bspwm ID type.
 	ID uint
-
-	// State contains the structure for the whole state of a bspwm instance.
-	State struct {
-		FocusedMonitorID ID        `json:"focusedMonitorId"`
-		PrimaryMonitorID ID        `json:"primaryMonitorId"`
-		ClientsCount     int       `json:"clientsCount"`
-		Monitors         []Monitor `json:"monitors"`
-		FocusHistory     []struct {
-			MonitorID ID `json:"monitorId"`
-			DesktopID ID `json:"desktopId"`
-			NodeID    ID `json:"nodeId"`
-		} `json:"focusHistory"`
-		StackedNodesList []ID `json:"stackingList"`
-	}
 
 	// Monitor contains all the info regarding a given monitor.
 	Monitor struct {
@@ -52,40 +41,6 @@ type (
 		FocusedNodeID ID         `json:"focusedNodeId"`
 		Padding       padding    `json:"padding"`
 		Root          Node       `json:"root"`
-	}
-
-	// Node contains all the info regarding a given node.
-	Node struct {
-		ID         ID        `json:"id"`
-		SplitType  SplitType `json:"SplitType"`
-		SplitRatio float64   `json:"splitRatio"`
-		Vacant     bool      `json:"vacant"`
-		Hidden     bool      `json:"hidden"`
-		Sticky     bool      `json:"sticky"`
-		Private    bool      `json:"private"`
-		Locked     bool      `json:"locked"`
-		Marked     bool      `json:"marked"`
-		Preselect  *struct {
-			SplitDirection DirectionType `json:"splitDir"`
-			SplitRatio     float64       `json:"splitRatio"`
-		} `json:"presel"`
-		Rectangle   rectangle   `json:"rectangle"`
-		Constraints constraints `json:"constraints"`
-		FirstChild  *Node       `json:"firstChild"`
-		SecondChild *Node       `json:"secondChild"`
-		Client      struct {
-			ClassName         string    `json:"className"`
-			InstanceName      string    `json:"instanceName"`
-			BorderWidth       int       `json:"borderWidth"`
-			State             string    `json:"state"`
-			LastState         string    `json:"lastState"`
-			Layer             string    `json:"layer"`
-			LastLayer         string    `json:"lastLayer"`
-			Urgent            bool      `json:"urgent"`
-			Shown             bool      `json:"shown"`
-			TiledRectangle    rectangle `json:"tiledRectangle"`
-			FloatingRectangle rectangle `json:"floatingRectangle"`
-		} `json:"client"`
 	}
 
 	// Event holds the event type and a payload that can be type-cast into the correct event-type model.

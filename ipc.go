@@ -81,10 +81,6 @@ func (ipc ipcConn) Receive() ([]byte, error) {
 		msg = append(msg, buffer...)
 	}
 
-	if len(msg) == 0 {
-		return nil, errors.New("response was empty")
-	}
-
 	return bytes.Trim(msg, "\x00"), nil
 }
 
@@ -113,7 +109,10 @@ func (ipc ipcConn) ReceiveAsync() (chan []byte, chan error) {
 				break
 			}
 
-			resCh <- bytes.Trim(buffer, "\x00")
+			buffer = bytes.Trim(buffer, "\x00")
+			for _, res := range bytes.Split(buffer, []byte("\n")) { // This is needed because events sent in quick succession will be "glued" together, sometimes.
+				resCh <- res
+			}
 		}
 	}(resCh, errCh)
 

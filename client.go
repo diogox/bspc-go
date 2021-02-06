@@ -17,8 +17,8 @@ type (
 	}
 
 	Client interface {
-		Query(rawCmd string, resResolver queryResponseResolver) error
-		Subscribe(rawEvents string) (chan Event, chan error, error)
+		Query(rawCmd string, resResolver QueryResponseResolver) error
+		// subscribe(rawEvents string) (chan Event, chan error, error) // TODO: Remove this, or make it public again
 		SubscribeEvents(event EventType, events ...EventType) (chan Event, chan error, error)
 	}
 
@@ -78,9 +78,9 @@ func NewWithSocketPath(path string, logger Logger) (Client, error) {
 // Query takes in a "raw" string bpsc command (without the "bspc" prefix), and populates its
 // response into the provided type. The models provided in this package can be used to construct
 // the response type.
-func (c client) Query(rawCmd string, resResolver queryResponseResolver) error {
+func (c client) Query(rawCmd string, resResolver QueryResponseResolver) error {
 	// TODO: How can I return a sentinel error if the command is invalid? Need to read errors from the socket.
-	c.logger.Info(fmt.Sprintf("using socket at path %s", c.socketPath))
+	c.logger.Info(fmt.Sprintf("using socket at path %s", c.socketPath)) // TODO: The logger needs to be optional, need to nil-check
 
 	socketAddr, err := newUnixSocketAddress(c.socketPath)
 	if err != nil {
@@ -112,10 +112,14 @@ func (c client) Query(rawCmd string, resResolver queryResponseResolver) error {
 	return nil
 }
 
-// Subscribe returns two channels: one for the events published by bspwm
+// subscribe returns two channels: one for the events published by bspwm
 // and that we subscribe to, and one for the errors that might occur during
 // the subscription.
-func (c client) Subscribe(rawEvents string) (chan Event, chan error, error) {
+// It is a private method, because passing in more than one event can cause errors,
+// as bspwm will sometimes jumble to events together with no clear delimiters that I could identify. TODO
+// (for eg. when you enable monocle mode, `desktop_layout` and `node_remove` events will often be
+// mixed in the same string, with no delimiters between the end of one event, and the beginning of another).
+func (c client) subscribe(rawEvents string) (chan Event, chan error, error) {
 	c.logger.Info(fmt.Sprintf("using socket at path %s", c.socketPath))
 
 	socketAddr, err := newUnixSocketAddress(c.socketPath)
@@ -738,7 +742,7 @@ func (c client) Subscribe(rawEvents string) (chan Event, chan error, error) {
 					NodeGeometry: geometry,
 				}
 			case EventTypeNodeState:
-				if len(parts) != 4 {
+				if len(parts) != 5 {
 					c.logEventWarning(ev.Type, "not enough fields")
 					continue
 				}
@@ -767,11 +771,28 @@ func (c client) Subscribe(rawEvents string) (chan Event, chan error, error) {
 					continue
 				}
 
+				const (
+					enabledON  = "on"
+					enabledOFF = "off"
+				)
+
+				var wasEnabled bool
+				switch parts[4] {
+				case enabledON:
+					wasEnabled = true
+				case enabledOFF:
+					wasEnabled = false
+				default:
+					c.logEventWarning(ev.Type, fmt.Sprintf("invalid field '%s'", parts[4]))
+					continue
+				}
+
 				ev.Payload = EventNodeState{
-					MonitorID: mID,
-					DesktopID: dID,
-					NodeID:    nID,
-					State:     state,
+					MonitorID:  mID,
+					DesktopID:  dID,
+					NodeID:     nID,
+					State:      state,
+					WasEnabled: wasEnabled,
 				}
 			case EventTypeNodeFlag:
 				if len(parts) != 5 {
@@ -797,16 +818,16 @@ func (c client) Subscribe(rawEvents string) (chan Event, chan error, error) {
 					continue
 				}
 
-				const (
-					enabledON  = "on"
-					enabledOFF = "off"
-				)
-
 				state := StateType(parts[3])
 				if !state.IsValid() {
 					c.logEventWarning(ev.Type, fmt.Sprintf("invalid state %s", state))
 					continue
 				}
+
+				const (
+					enabledON  = "on"
+					enabledOFF = "off"
+				)
 
 				var wasEnabled bool
 				switch parts[4] {
@@ -919,13 +940,53 @@ func (c client) Subscribe(rawEvents string) (chan Event, chan error, error) {
 
 // SubscribeEvents takes in one or more of the available events in this package and calls Subscribe
 // with the appropriate raw command. Take a look at Subscribe to know more.
-func (c client) SubscribeEvents(event EventType, events ...EventType) (chan Event, chan error, error) {
-	eventsStr := []string{string(event)}
+// It currently uses a socket connection for each event as to avoid having different events jumbled together
+// by bspwm. Haven't found a way to tell those "glued" events apart. TODO.
+func (c client) SubscribeEvents(event EventType, moreEvents ...EventType) (chan Event, chan error, error) {
+	// TODO: Refactor this code to be more maintainable.
+
+	var (
+		eventsChannel = make(chan Event)
+		errorsChannel = make(chan error)
+	)
+
+	events := []EventType{event}
+	events = append(events, moreEvents...)
+
+	var (
+		eventChs []chan Event
+		errChs   []chan error
+	)
+
 	for _, ev := range events {
-		eventsStr = append(eventsStr, string(ev))
+		eventCh, errCh, err := c.subscribe(string(ev))
+		if err != nil {
+			return nil, nil, err
+		}
+
+		eventChs = append(eventChs, eventCh)
+		errChs = append(errChs, errCh)
 	}
 
-	return c.Subscribe(strings.Join(eventsStr, " "))
+	for i := range eventChs {
+		var (
+			evCh  = eventChs[i]
+			errCh = errChs[i]
+		)
+
+		go func() {
+			for {
+				select {
+				case ev := <-evCh:
+					eventsChannel <- ev
+				case err := <-errCh:
+					errorsChannel <- err
+				}
+			}
+		}()
+	}
+
+	return eventsChannel, errorsChannel, nil
 }
 
 func (c client) logEventWarning(ev EventType, msg string) {

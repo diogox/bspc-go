@@ -22,7 +22,7 @@ func main() {
 		panic(err)
 	}
 
-	eventCh, errCh, err := c.SubscribeEvents(bspc.EventTypeNodeAdd, bspc.EventTypeNodeRemove, bspc.EventTypePointerAction, bspc.EventTypeDesktopFocus)
+	eventCh, errCh, err := c.SubscribeEvents(bspc.EventTypeNodeRemove, bspc.EventTypeDesktopLayout)
 	if err != nil {
 		panic(err)
 	}
@@ -33,18 +33,12 @@ func main() {
 			panic(err)
 		case ev := <-eventCh:
 			switch ev.Type {
-			case bspc.EventTypeNodeAdd:
-				ev := ev.Payload.(bspc.EventNodeAdd)
-				fmt.Println("Node Added: ", ev.NodeID)
+			case bspc.EventTypeDesktopLayout:
+				ev := ev.Payload.(bspc.EventDesktopLayout)
+				fmt.Println("Layout Changed: ", ev.DesktopID)
 			case bspc.EventTypeNodeRemove:
 				ev := ev.Payload.(bspc.EventNodeRemove)
 				fmt.Println("Node Removed: ", ev.NodeID)
-			case bspc.EventTypePointerAction:
-				ev := ev.Payload.(bspc.EventPointerAction)
-				fmt.Println("Pointer Action: ", ev.PointerActionState)
-			case bspc.EventTypeDesktopFocus:
-				ev := ev.Payload.(bspc.EventDesktopFocus)
-				fmt.Println("Desktop Focused: ", ev.DesktopID)
 			}
 		}
 	}
